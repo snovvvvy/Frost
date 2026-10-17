@@ -2,7 +2,7 @@
 -- example script by https://github.com/mstudio45/LinoriaLib/blob/main/Example.lua and modified by deivid
 -- You can suggest changes with a pull request or something
 
-local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local repo = "https://raw.githubusercontent.com/snovvvvy/Frost/custom/"
 local Library = loadstring(game:HttpGet(repo .. "Library.lua"))()
 local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
 local SaveManager = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
@@ -752,6 +752,13 @@ MenuGroup:AddToggle("AlwaysOnTop", {
 	Callback = function(Value)
 		Window:SetAlwaysOnTop(Value)
 	end,
+})
+MenuGroup:AddToggle("SnowBackdrop", {
+    Text = "Snow Backdrop",
+    Default = true,
+    Callback = function(Value)
+        Library.SnowEffect = Value
+    end,
 })
 MenuGroup:AddDropdown("NotificationSide", {
 	Values = { "Left", "Right" },
