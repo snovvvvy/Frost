@@ -2,5 +2,10 @@
     "luau-lsp.types.definitionFiles": [
         "./.vscode/globals.d.luau"
     ],
-    "liveServer.settings.port": 5501
+    "liveServer.settings.port": 5501,
+    "editor.fontSize": 22,
+    "workbench.activityBar.compact": false,
+    "window.density.layout": "compact",
+    "editor.fontFamily": "JetBrains Mono",
+    "files.autoSave": "afterDelay"
 }
