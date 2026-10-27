@@ -1,3 +1,23 @@
+## 27.10.2026
+
+```diff
+[features]
++ Window:AddCustomTab()
++ Library:CreateIcon(Icon, Properties, IsButton) and Library:ApplyIcon(Target, Icon)
++ AddSettings({ Width }) for certain elements (adds a gear button that opens a groupbox settings box)
++ SetCameraCFrame, GetCameraCFrame, Rotate, Zoom, LookAt, SetDistance, GetDistance, SetFieldOfView for Viewport element
++ Remove option in the KeyPicker right click menu to unbind the key
++ MaxHeight option and SetMaxHeight for Groupboxes, Tabboxes and Tabbox tabs (content becomes scrollable past the max height)
+
+[changes]
++ Slider right click input now allows typing values past Min and Max
++ Font icons are now created directly as TextLabel or TextButton instead of an ImageLabel with a TextLabel child
++ Library:ApplyLucideIcon is deprecated, use Library:CreateIcon or Library:ApplyIcon instead
+
+[fixed]
++ Fixed font icons rendering a pixel smaller and visually off center
+```
+
 ## 25.10.2026
 
 ```diff
