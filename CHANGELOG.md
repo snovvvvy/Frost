@@ -1,3 +1,23 @@
+## 29.10.2026
+
+```diff
+[fixed]
++ Fixed search being case sensitive for non-English letters and fuzzy matching breaking on non-English characters
++ Fixed text strokes being too strong on light themes and not updating when the theme changes
+```
+
+## 28.10.2026
+
+```diff
+[changes]
++ Icons may transform to blurry ImageLabels instead of font TextLabels to correctly center the icon due to Roblox's font rendering issues on certain icon sizes
+
+[fixed]
++ Fixed inconsistent sizes and gaps of the settings gear, ColorPickers and KeyPickers across elements
++ Fixed the settings menu not connecting to its gear button like other context menus
++ Fixed settings menus staying open after toggling the UI
+```
+
 ## 27.10.2026
 
 ```diff

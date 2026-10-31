@@ -310,6 +310,7 @@ local Library = {
 
     --// Image Manager \\--
     ImageManager = CustomImageManager,
+    MaxSpriteIconSize = 24,
 
     --// Misc \\--
     Notify = nil, Toggle = nil -- we love luau lsp
@@ -680,6 +681,11 @@ local function GetSchemeValue(Index)
     return Library.Scheme[Index]
 end
 
+local function GetTextStrokeColor(): Color3
+    local Color = Library.Scheme.FontColor
+    return (Color.R * 0.299 + Color.G * 0.587 + Color.B * 0.114) > 0.5 and Library.Scheme.DarkColor or Library.Scheme.WhiteColor
+end
+
 --// Basic Functions \\--
 local function WaitForEvent(Event, Timeout, Condition)
     local Bindable = Instance.new("BindableEvent")
@@ -777,6 +783,19 @@ local function Round(Value, Rounding)
 end
 
 --// Fuzzy Search \\--
+local function LowerText(Text: string): string
+    return (Text:lower():gsub("[\195\206\208][\128-\191]", function(Char)
+        local Code = utf8.codepoint(Char)
+        if (Code >= 0xC0 and Code <= 0xDE and Code ~= 0xD7) or (Code >= 0x391 and Code <= 0x3AB) or (Code >= 0x410 and Code <= 0x42F) then
+            return utf8.char(Code + 32)
+        elseif Code >= 0x400 and Code <= 0x40F then
+            return utf8.char(Code + 80)
+        end
+
+        return Char
+    end))
+end
+
 local function FuzzyScore(Text: string, Search: string): (boolean, number)
     if Search == "" then
         return true, 0
@@ -795,7 +814,11 @@ local function FuzzyScore(Text: string, Search: string): (boolean, number)
     end
 
     --// Fallback: fuzzy, in-order, non-consecutive character matching \\--
-    local TextLen, SearchLen = Text:len(), Search:len()
+    local TextChars, SearchChars = {}, {}
+    for Char in Text:gmatch(utf8.charpattern) do table.insert(TextChars, Char) end
+    for Char in Search:gmatch(utf8.charpattern) do table.insert(SearchChars, Char) end
+
+    local TextLen, SearchLen = #TextChars, #SearchChars
     if SearchLen > TextLen then
         return false, 0
     end
@@ -810,8 +833,8 @@ local function FuzzyScore(Text: string, Search: string): (boolean, number)
             break
         end
 
-        if Text:sub(TextIdx, TextIdx) == Search:sub(SearchIdx, SearchIdx) then
-            local PrevChar = TextIdx > 1 and Text:sub(TextIdx - 1, TextIdx - 1) or ""
+        if TextChars[TextIdx] == SearchChars[SearchIdx] then
+            local PrevChar = TextIdx > 1 and TextChars[TextIdx - 1] or ""
             local AtBoundary = TextIdx == 1 or PrevChar:match("[%s%p_]") ~= nil
 
             RunLength = (LastMatchIdx == TextIdx - 1) and (RunLength + 1) or 1
@@ -839,7 +862,7 @@ local function TryFuzzyMatch(Text: any, Search: string): (boolean, number)
         return false, 0
     end
 
-    return FuzzyScore(Text:lower(), Search)
+    return FuzzyScore(LowerText(Text), Search)
 end
 
 local function FuzzyMatchScore(Text: any, Search: string): number
@@ -847,7 +870,7 @@ local function FuzzyMatchScore(Text: any, Search: string): number
         return 0
     end
 
-    local Normalized = NormalizeSearch(Text:lower())
+    local Normalized = NormalizeSearch(LowerText(Text))
     local Matched, Score = FuzzyScore(Normalized, Search)
     if not Matched then
         return 0
@@ -1378,7 +1401,7 @@ function Library:UpdateSearch(SearchText)
         ResetTab(Tab)
     end
 
-    local Search = NormalizeSearch(SearchText:lower())
+    local Search = NormalizeSearch(LowerText(SearchText))
     if Trim(Search) == "" then
         Library.Searching = false
         Library.LastSearchTab = nil
@@ -1637,6 +1660,23 @@ local function IconProperties(ClassName: string, Properties: { [string]: any }):
     return Mapped
 end
 
+local function IsFontIcon(Icon: Icon?, Size: UDim2?, Parent: Instance?): boolean
+    if Icon == nil or Icon.FontFace == nil or Size == nil then
+        return false
+    end
+
+    local Height = Size.Y.Offset
+    if Size.Y.Scale ~= 0 then
+        if not (Parent and Parent:IsA("GuiObject")) then
+            return false
+        end
+
+        Height += Parent.AbsoluteSize.Y / Library.DPIScale * Size.Y.Scale
+    end
+
+    return Height > Library.MaxSpriteIconSize
+end
+
 local function ImageContent(Icon: Icon?): { [string]: any }
     return {
         Image = Icon and Icon.Url or "",
@@ -1657,7 +1697,7 @@ local function TweenIcon(Target: GuiObject, Properties: { [string]: any }): Twee
 end
 
 function Library:CreateIcon(Icon: Icon?, Properties: { [string]: any }?, IsButton: boolean?): GuiObject
-    local IsFont = Icon ~= nil and Icon.FontFace ~= nil
+    local IsFont = IsFontIcon(Icon, Properties and Properties.Size, Properties and Properties.Parent)
     local ClassName = (if IsFont then "Text" else "Image") .. (if IsButton then "Button" else "Label")
 
     local Merged: { [string]: any } = {
@@ -1679,7 +1719,7 @@ function Library:CreateIcon(Icon: Icon?, Properties: { [string]: any }?, IsButto
 end
 
 function Library:ApplyIcon(Target: GuiObject, Icon: Icon?): GuiObject
-    local IsFont = Icon ~= nil and Icon.FontFace ~= nil
+    local IsFont = IsFontIcon(Icon, Target.Size, Target.Parent)
     local IsText = Target:IsA("TextLabel") or Target:IsA("TextButton")
 
     if IsFont ~= IsText then
@@ -1709,8 +1749,8 @@ function Library:ApplyIcon(Target: GuiObject, Icon: Icon?): GuiObject
         if not Target:FindFirstChild("IconPadding") then
             New("UIPadding", {
                 Name = "IconPadding",
-                PaddingLeft = UDim.new(0, -1),
-                PaddingRight = UDim.new(0, -1),
+                PaddingLeft = UDim.new(-0.5, 0),
+                PaddingRight = UDim.new(-0.5, 0),
                 Parent = Target,
             })
         end
@@ -3627,6 +3667,21 @@ end
 
 --// Context Menu \\--
 local CurrentMenu
+
+local function CloseMenus(Until: any?, ShouldClose: ((Menu: any) -> boolean)?)
+    local Closed = {}
+
+    while CurrentMenu and CurrentMenu ~= Until and not Closed[CurrentMenu] do
+        local Menu = CurrentMenu
+        if ShouldClose and not ShouldClose(Menu) then
+            break
+        end
+
+        Closed[Menu] = true
+        Menu:Close()
+    end
+end
+
 function Library:AddContextMenu(
     Holder: GuiObject,
     Size: UDim2 | () -> (),
@@ -3774,9 +3829,7 @@ function Library:AddContextMenu(
             Check = Check.ParentMenu
         end
 
-        while CurrentMenu and CurrentMenu ~= NestedParent do
-            CurrentMenu:Close()
-        end
+        CloseMenus(NestedParent)
 
         Table.ParentMenu = NestedParent
         CurrentMenu = Table
@@ -3958,9 +4011,7 @@ function Library:AddContextMenu(
         end
 
         if Table.Active then
-            while CurrentMenu and CurrentMenu ~= Table do
-                CurrentMenu:Close()
-            end
+            CloseMenus(Table)
             Table:Close()
         end
 
@@ -3991,15 +4042,9 @@ Library:GiveSignal(UserInputService.InputBegan:Connect(function(Input: InputObje
     if IsClickInput(Input, true) then
         local Location = Input.Position
 
-        while
-            CurrentMenu
-            and not (
-                Library:MouseIsOverFrame(CurrentMenu.Menu, Location)
-                or Library:MouseIsOverFrame(CurrentMenu.Holder, Location)
-            )
-        do
-            CurrentMenu:Close()
-        end
+        CloseMenus(nil, function(Menu)
+            return not (Library:MouseIsOverFrame(Menu.Menu, Location) or Library:MouseIsOverFrame(Menu.Holder, Location))
+        end)
     end
 end))
 
@@ -4426,7 +4471,7 @@ do
 
         local Picker = New("TextButton", {
             BackgroundColor3 = "MainColor",
-            Size = UDim2.fromOffset(18, 18),
+            Size = UDim2.fromOffset(21, 21),
             Text = (IsForButton and SlideOverflow) and "" or KeyPicker.Value,
             TextSize = 14,
             TextTransparency = 0.4,
@@ -4512,7 +4557,7 @@ do
 
             New("UIListLayout", {
                 FillDirection = Enum.FillDirection.Horizontal,
-                Padding = UDim.new(0, 9),
+                Padding = UDim.new(0, 6),
                 Parent = Holder,
             })
 
@@ -4973,7 +5018,7 @@ do
                     ToggleLabel.AbsoluteSize.X / Library.DPIScale
                 )
                 Picker.Text = DisplayText
-                Picker.Size = IsForButton and UDim2.new(0, X + 9, 1, 0) or UDim2.fromOffset((X + 9), (Y + 4))
+                Picker.Size = IsForButton and UDim2.new(0, X + 9, 1, 0) or UDim2.fromOffset(X + 9, 21)
             end
         end
 
@@ -5190,7 +5235,7 @@ do
                 KeyPicker:Display("...")
             else
                 Picker.Text = "..."
-                Picker.Size = IsForButton and UDim2.new(0, 29, 1, 0) or UDim2.fromOffset(29, 18)
+                Picker.Size = IsForButton and UDim2.new(0, 29, 1, 0) or UDim2.fromOffset(29, 21)
             end
 
             -- Wait for any input --
@@ -5512,7 +5557,7 @@ do
 
         local Holder = New("TextButton", {
             BackgroundColor3 = ColorPicker.Value,
-            Size = UDim2.fromOffset(18, 18),
+            Size = UDim2.fromOffset(21, 21),
             Text = "",
             Parent = ToggleLabel,
         })
@@ -6443,61 +6488,38 @@ do
             Parent = Gear,
         })
 
-        table.insert(
-            Library.Corners,
-            New("UICorner", {
-                CornerRadius = UDim.new(0, Library.CornerRadius / 2),
-                Parent = Gear,
-            })
-        )
-
-        local Content = New("Frame", {
-            AnchorPoint = Vector2.new(0.5, 0.5),
-            AutomaticSize = Enum.AutomaticSize.X,
-            BackgroundTransparency = 1,
-            Position = UDim2.fromScale(0.5, 0.5),
-            Size = UDim2.fromOffset(0, 16),
+        local GearCorner = New("UICorner", {
+            TopLeftRadius = UDim.new(0, Library.CornerRadius / 2),
+            TopRightRadius = UDim.new(0, Library.CornerRadius / 2),
+            BottomRightRadius = UDim.new(0, Library.CornerRadius / 2),
+            BottomLeftRadius = UDim.new(0, Library.CornerRadius / 2),
             Parent = Gear,
-        })
-        New("UIListLayout", {
-            FillDirection = Enum.FillDirection.Horizontal,
-            HorizontalAlignment = Enum.HorizontalAlignment.Center,
-            VerticalAlignment = Enum.VerticalAlignment.Center,
-            Padding = UDim.new(0, 6),
-            Parent = Content,
+        }); table.insert(Library.SpecificCorners, GearCorner)
+
+        New("UIPadding", {
+            PaddingBottom = UDim.new(0, 3),
+            PaddingLeft = UDim.new(0, 3),
+            PaddingRight = UDim.new(0, 3),
+            PaddingTop = UDim.new(0, 3),
+            Parent = Gear,
         })
 
         local Icon = Library:CreateIcon(SettingsIcon, {
             ImageColor3 = "FontColor",
             ImageTransparency = 0.5,
-            Size = UDim2.fromOffset(14, 14),
-            Parent = Content,
+            Size = UDim2.fromScale(1, 1),
+            Parent = Gear,
         })
 
         if IsForButton then
-            local Holder = New("Frame", {
-                BackgroundTransparency = 1,
-                LayoutOrder = ParentObj.Base.LayoutOrder,
-                Size = UDim2.new(1, 0, 0, 21),
-                Parent = ParentObj.Base.Parent,
-            })
-
-            New("UIListLayout", {
-                FillDirection = Enum.FillDirection.Horizontal,
-                Padding = UDim.new(0, 9),
-                Parent = Holder,
-            })
-
             New("UIFlexItem", {
-                FlexMode = Enum.UIFlexMode.Fill,
-                Parent = ParentObj.Base,
+                FlexMode = Enum.UIFlexMode.None,
+                Parent = Gear,
             })
 
-            ParentObj.Base.Parent = Holder
-            Gear.Parent = Holder
-
-            Gear.LayoutOrder = 2
+            Gear.LayoutOrder = ParentObj.Base.LayoutOrder + 1
             Gear.Size = UDim2.new(0, 21, 1, 0)
+            Gear.Parent = ParentObj.Base.Parent
         elseif IsForContainer then
             local Height = ParentContainer.Size.Y.Offset
             ParentContainer.Size = UDim2.new(1, -(Height + 6), 0, Height)
@@ -6507,6 +6529,7 @@ do
             Gear.Size = UDim2.fromOffset(Height, Height)
             Gear.Parent = ParentObj.Holder
         else
+            Gear.Size = UDim2.fromOffset(21, 21)
             Gear.Parent = ParentObj.TextLabel
         end
 
@@ -6523,15 +6546,31 @@ do
             return UDim2.fromOffset(math.floor(Width), 0)
         end
 
-        local SettingsMenu = Library:AddContextMenu(Gear, GetMenuSize, function()
-            return { 0, Gear.AbsoluteSize.Y + 4 }
+        local SettingsMenu; SettingsMenu = Library:AddContextMenu(Gear, GetMenuSize, function()
+            return { 0.5, Gear.AbsoluteSize.Y + 1.5 }
         end, 1, function(Active: boolean)
+            local Half = UDim.new(0, Library.CornerRadius / 2)
+            local Zero = UDim.new(0, 0)
+
+            GearCorner.TopLeftRadius = Half
+            GearCorner.TopRightRadius = Half
+            GearCorner.BottomRightRadius = Active and Zero or Half
+            GearCorner.BottomLeftRadius = Active and Zero or Half
+
+            local MenuCorner = SettingsMenu and SettingsMenu.Corner
+            if MenuCorner then
+                MenuCorner.TopLeftRadius = Zero
+                MenuCorner.TopRightRadius = Half
+                MenuCorner.BottomRightRadius = Half
+                MenuCorner.BottomLeftRadius = Half
+            end
+
             if ParentObj.Disabled then
                 return
             end
 
             SetIconProperties(Icon, { ImageTransparency = Active and 0 or 0.5 })
-        end)
+        end, false, "no_top_left")
         Settings.Menu = SettingsMenu
 
         local Container = New("Frame", {
@@ -6581,9 +6620,7 @@ do
                 return
             end
 
-            while CurrentMenu and CurrentMenu ~= SettingsMenu do
-                CurrentMenu:Close()
-            end
+            CloseMenus(SettingsMenu)
 
             SettingsMenu:Close()
         end
@@ -6921,6 +6958,7 @@ do
             New("UIListLayout", {
                 FillDirection = Enum.FillDirection.Horizontal,
                 HorizontalAlignment = Enum.HorizontalAlignment.Right,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
                 Padding = UDim.new(0, 6),
                 Parent = TextLabel,
             })
@@ -7073,7 +7111,7 @@ do
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalFlex = Enum.UIFlexAlignment.Fill,
-            Padding = UDim.new(0, 9),
+            Padding = UDim.new(0, 6),
             Parent = Holder,
         })
 
@@ -7105,7 +7143,7 @@ do
             local Base = New("TextButton", {
                 Active = not Button.Disabled,
                 BackgroundColor3 = Button.Disabled and "BackgroundColor" or "MainColor",
-                LayoutOrder = Button.Type == "SubButton" and 1 or 0,
+                LayoutOrder = Button.Type == "SubButton" and 2 or 0,
                 Size = UDim2.fromScale(1, 1),
                 Text = "",
                 Visible = Button.Visible,
@@ -7575,6 +7613,7 @@ do
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             Parent = Label,
         })
@@ -7821,7 +7860,7 @@ do
 
         local Label = New("TextLabel", {
             BackgroundTransparency = 1,
-            Size = UDim2.new(1, -40, 1, 0),
+            Size = UDim2.new(1, -38, 1, 0),
             Text = Toggle.Text,
             TextSize = 14,
             TextTransparency = 0.4,
@@ -7832,6 +7871,7 @@ do
         New("UIListLayout", {
             FillDirection = Enum.FillDirection.Horizontal,
             HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
             Padding = UDim.new(0, 6),
             Parent = Label,
         })
@@ -8416,13 +8456,12 @@ do
         })
         New("UIStroke", {
             ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-            Color = "DarkColor",
+            Color = GetTextStrokeColor,
             LineJoinMode = Enum.LineJoinMode.Miter,
             Parent = DisplayLabel,
         })
 
         local InputTextBox
-        local InputTextBoxStroke
         if Info.AllowRightClickInput then
             InputTextBox = New("TextBox", {
                 BackgroundTransparency = 1,
@@ -8434,9 +8473,9 @@ do
                 ClearTextOnFocus = false,
                 Parent = Bar,
             })
-            InputTextBoxStroke = New("UIStroke", {
+            New("UIStroke", {
                 ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                Color = "DarkColor",
+                Color = GetTextStrokeColor,
                 LineJoinMode = Enum.LineJoinMode.Miter,
                 Parent = InputTextBox,
             })
@@ -8656,28 +8695,6 @@ do
 
                 Num = Round(Num, Slider.Rounding)
                 Slider:SetValue(Num)
-            end))
-
-            table.insert(Slider.Connections, InputTextBox.Focused:Connect(function()
-                if Slider.Disabled then
-                    return
-                end
-
-                Library.Registry[InputTextBoxStroke].Color = "AccentColor"
-                TweenService:Create(InputTextBoxStroke, Library.TweenInfo, {
-                    Color = Library.Scheme.AccentColor,
-                }):Play()
-            end))
-
-            table.insert(Slider.Connections, InputTextBox.FocusLost:Connect(function()
-                if Slider.Disabled then
-                    return
-                end
-
-                Library.Registry[InputTextBoxStroke].Color = "DarkColor"
-                TweenService:Create(InputTextBoxStroke, Library.TweenInfo, {
-                    Color = Library.Scheme.DarkColor,
-                }):Play()
             end))
         end
 
@@ -9148,7 +9165,7 @@ do
 
             --// Fuzzy-match dropdown values the same way the sidebar search
             --// does, so e.g. "clr" can find "Clear Inventory" in a list \\--
-            local SearchQuery = SearchBox and NormalizeSearch(SearchBox.Text:lower()) or ""
+            local SearchQuery = SearchBox and NormalizeSearch(LowerText(SearchBox.Text)) or ""
             local IsSearching = SearchQuery ~= ""
 
             local EnabledList, DisabledList = {}, {}
@@ -9161,7 +9178,7 @@ do
 
                 local MatchScore = 0
                 if IsSearching then
-                    local Matched, Score = FuzzyScore(FormattedValue:lower(), SearchQuery)
+                    local Matched, Score = FuzzyScore(LowerText(FormattedValue), SearchQuery)
                     if not Matched then
                         continue
                     end
@@ -12988,7 +13005,7 @@ function Library:CreateWindow(WindowInfo)
 
             New("UIStroke", {
                 ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-                Color = "DarkColor",
+                Color = GetTextStrokeColor,
                 LineJoinMode = Enum.LineJoinMode.Miter,
                 Parent = WarningText,
             })
@@ -15374,14 +15391,7 @@ function Library:CreateWindow(WindowInfo)
             RestoreMouseIcon()
             TooltipLabel.Visible = false
 
-            for _, Option in Library.Options do
-                if Option.Type == "ColorPicker" then
-                    Option.ColorMenu:Close()
-                    Option.ContextMenu:Close()
-                elseif Option.Type == "Dropdown" or Option.Type == "KeyPicker" then
-                    Option.Menu:Close()
-                end
-            end
+            CloseMenus()
         end
     end
 
@@ -15827,7 +15837,7 @@ function Library:CreateLoading(LoadingInfo)
     })
     New("UIStroke", {
         ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual,
-        Color = "DarkColor",
+        Color = GetTextStrokeColor,
         LineJoinMode = Enum.LineJoinMode.Miter,
         Parent = ProgressLabel,
     })
