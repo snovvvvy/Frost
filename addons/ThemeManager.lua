@@ -841,7 +841,8 @@ function ThemeManager:CreateThemeManager(Themesbox: any)
         
         Values = GetAllFontNames(),
         AllowNull = false,
-        Multi = false
+        Multi = false,
+        Searchable = true,
     })
     
     Themesbox:AddInput("BackgroundImage", { 
