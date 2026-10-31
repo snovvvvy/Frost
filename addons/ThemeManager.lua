@@ -153,6 +153,21 @@ local function IsValidFolderPath(Name: string): boolean
     )
 end
 
+local function GetAllFontNames(): { string }
+    local Names = {}
+
+    for _, FontItem in Enum.Font:GetEnumItems() do
+        if FontItem == Enum.Font.Unknown then
+            continue
+        end
+
+        table.insert(Names, FontItem.Name)
+    end
+
+    table.sort(Names)
+    return Names
+end
+
 --// Contrast helpers \\--
 local function LinearizeChannel(Channel: number): number
     if Channel <= SrgbLinearThreshold then
@@ -459,8 +474,9 @@ function ThemeManager:SetDefaultTheme(Theme: any)
         FinalTheme.FontFace = FontFace.Name
 
     elseif FontFaceType == "string" then
-        LibraryScheme.Font = Font.fromEnum(Enum.Font[FontFace] :: Enum.Font)
-        FinalTheme.FontFace = FontFace
+        local FontItem = Enum.Font:FromName(FontFace) or Enum.Font.Code
+        LibraryScheme.Font = Font.fromEnum(FontItem)
+        FinalTheme.FontFace = FontItem.Name
     
     else
         LibraryScheme.Font = Font.fromEnum(Enum.Font.Code)
@@ -658,8 +674,11 @@ function ThemeManager:ApplyThemeData(ThemeData: any): (boolean, string?)
         local FinalValue = Value
 
         if Index == "FontFace" then
-            if typeof(Value) ~= "string" or not Enum.Font[Value] then continue end
-            ThemeManager.Library:SetFont(Enum.Font[Value])
+            local FontItem = if typeof(Value) == "string" then Enum.Font:FromName(Value) else nil
+            if not FontItem then
+                continue
+            end
+            ThemeManager.Library:SetFont(FontItem)
 
         elseif Index == "BackgroundImage" then
             if typeof(Value) ~= "string" then continue end
@@ -820,7 +839,7 @@ function ThemeManager:CreateThemeManager(Themesbox: any)
         Text = "Font Face",
         Default = "Code",
         
-        Values = { "BuilderSans", "Code", "Fantasy", "Gotham", "Jura", "Roboto", "RobotoMono", "SourceSans" },
+        Values = GetAllFontNames(),
         AllowNull = false,
         Multi = false
     })
