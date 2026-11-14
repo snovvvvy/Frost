@@ -318,7 +318,6 @@ local Library = {
 
     --// Image Manager \\--
     ImageManager = CustomImageManager,
-    MaxSpriteIconSize = 24,
 
     --// Misc \\--
     Notify = nil,
@@ -570,6 +569,7 @@ local Templates = {
         DragSelect = false,
         MaxVisibleDropdownItems = 8,
         KeepDisabledValuePosition = false,
+        AutoWidth = false,
 
         Callback = function() end,
         Changed = function() end,
@@ -765,6 +765,14 @@ local function IsSequentialArray(Table: { [any]: any })
     return true
 end
 
+local function IsDropdownDivider(Value: any): boolean
+    return typeof(Value) == "table" and Value.DropdownDivider == true
+end
+
+function Library:DropdownDivider(Title: string?)
+    return { DropdownDivider = true, Title = Title }
+end
+
 local function StopTween(Tween: TweenBase, Destroy: boolean?)
     if not Tween then
         return
@@ -928,6 +936,10 @@ local function MatchesSearch(ElementInfo, Search: string, ForceMatch: boolean?):
             Checked += 1
             if Checked > 200 then
                 break
+            end
+
+            if IsDropdownDivider(Value) then
+                continue
             end
 
             if
@@ -1423,7 +1435,7 @@ function Library:UpdateSearch(SearchText)
 
     local TabsToSearch = {}
     for _, Tab in Library.Tabs do
-        if typeof(Tab) == "table" and not Tab.IsKeyTab and not Tab.IsCustomTab then
+        if typeof(Tab) == "table" and not Tab.IsKeyTab and not Tab.IsCustomTab and not Tab.HasSubTabs then
             table.insert(TabsToSearch, Tab)
         end
     end
@@ -1450,6 +1462,7 @@ function Library:UpdateSearch(SearchText)
     local BestScore = -1
     local ActiveScore = -1
     local ActiveHasVisible = false
+    local CurrentTab = Library.ActiveTab and (Library.ActiveTab.ActiveSubTab or Library.ActiveTab)
 
     for _, Tab in TabsToSearch do
         local HasVisible, Score = ApplySearchToTab(Tab, Search)
@@ -1457,7 +1470,7 @@ function Library:UpdateSearch(SearchText)
             continue
         end
 
-        if Tab == Library.ActiveTab then
+        if Tab == CurrentTab then
             ActiveHasVisible = true
             ActiveScore = Score
         end
@@ -1485,7 +1498,8 @@ function Library:UpdateSearch(SearchText)
                 return
             end
 
-            if Library.ActiveTab ~= BestTab then
+            local Current = Library.ActiveTab and (Library.ActiveTab.ActiveSubTab or Library.ActiveTab)
+            if Current ~= BestTab then
                 BestTab:Show()
             elseif Library.ActiveTab then
                 Library.ActiveTab:RefreshSides()
@@ -1717,21 +1731,8 @@ local function IconProperties(ClassName: string, Properties: { [string]: any }):
     return Mapped
 end
 
-local function IsFontIcon(Icon: Icon?, Size: UDim2?, Parent: Instance?): boolean
-    if Icon == nil or Icon.FontFace == nil or Size == nil then
-        return false
-    end
-
-    local Height = Size.Y.Offset
-    if Size.Y.Scale ~= 0 then
-        if not (Parent and Parent:IsA("GuiObject")) then
-            return false
-        end
-
-        Height += Parent.AbsoluteSize.Y / Library.DPIScale * Size.Y.Scale
-    end
-
-    return Height > Library.MaxSpriteIconSize
+local function IsFontIcon(Icon: Icon?): boolean
+    return Icon ~= nil and Icon.FontFace ~= nil
 end
 
 local function ImageContent(Icon: Icon?): { [string]: any }
@@ -1754,7 +1755,7 @@ local function TweenIcon(Target: GuiObject, Properties: { [string]: any }): Twee
 end
 
 function Library:CreateIcon(Icon: Icon?, Properties: { [string]: any }?, IsButton: boolean?): GuiObject
-    local IsFont = IsFontIcon(Icon, Properties and Properties.Size, Properties and Properties.Parent)
+    local IsFont = IsFontIcon(Icon)
     local ClassName = (if IsFont then "Text" else "Image") .. (if IsButton then "Button" else "Label")
 
     local Merged: { [string]: any } = {
@@ -1776,7 +1777,7 @@ function Library:CreateIcon(Icon: Icon?, Properties: { [string]: any }?, IsButto
 end
 
 function Library:ApplyIcon(Target: GuiObject, Icon: Icon?): GuiObject
-    local IsFont = IsFontIcon(Icon, Target.Size, Target.Parent)
+    local IsFont = IsFontIcon(Icon)
     local IsText = Target:IsA("TextLabel") or Target:IsA("TextButton")
 
     if IsFont ~= IsText then
@@ -1806,7 +1807,7 @@ function Library:ApplyIcon(Target: GuiObject, Icon: Icon?): GuiObject
         if not Target:FindFirstChild("IconPadding") then
             New("UIPadding", {
                 Name = "IconPadding",
-                PaddingLeft = UDim.new(-0.5, 0),
+                PaddingLeft = UDim.new(-0.5, -0.5),
                 PaddingRight = UDim.new(-0.5, 0),
                 Parent = Target,
             })
@@ -2698,10 +2699,9 @@ function Library:AddBlank(Frame: GuiObject, Size: UDim2)
 end
 
 --// Animations \\--
-local TransparencyCache = {}
 local ActiveTabTweens = setmetatable({}, { __mode = "k" })
 
-function Library:PlayTabAnimation(Tab, Showing: boolean, OnComplete: (() -> ())?)
+function Library:PlayTabAnimation(Tab, Showing: boolean, OnComplete: (() -> ())?, PreviousTab: any?)
     if type(Tab) ~= "table" or not Tab.Container then
         if OnComplete then
             OnComplete()
@@ -2743,10 +2743,13 @@ function Library:PlayTabAnimation(Tab, Showing: boolean, OnComplete: (() -> ())?
             Bottom = UDim2.fromOffset(0, Offset),
         }
 
-        if SwipeFrom == "auto" and Library.PreviousTab then
+        PreviousTab = PreviousTab or Library.PreviousTab
+        if SwipeFrom == "auto" and PreviousTab then
             local CurrentOrder = Tab.Button.LayoutOrder
-            local PreviousOrder = Library.PreviousTab.Button.LayoutOrder
-            if CurrentOrder and PreviousOrder then -- this may be unnecessary but oh well
+            local PreviousOrder = PreviousTab.Button.LayoutOrder
+            if CurrentOrder and PreviousOrder and Tab.IsSubTab then
+                StartPosition = CurrentOrder > PreviousOrder and StartingPositions.Right or StartingPositions.Left
+            elseif CurrentOrder and PreviousOrder then -- this may be unnecessary but oh well
                 StartPosition = CurrentOrder > PreviousOrder and StartingPositions.Top or StartingPositions.Bottom -- bigger order means its under the current button
             else
                 StartPosition = StartingPositions.Bottom
@@ -7058,7 +7061,7 @@ do
             local TextLabel = New("TextLabel", {
                 AutomaticSize = Enum.AutomaticSize.X,
                 BackgroundTransparency = 1,
-                Size = UDim2.fromScale(1, 0),
+                Size = UDim2.fromScale(1, 1),
                 Text = Text,
                 TextSize = 14,
                 TextTransparency = 0.5,
@@ -9200,6 +9203,9 @@ do
             Values = Info.Values,
             DisabledValues = Info.DisabledValues,
             ValueImages = Info.ValueImages,
+            FormatValue = Info.FormatValue,
+            FormatDisplayValue = Info.FormatDisplayValue,
+            FormatListValue = Info.FormatListValue,
 
             Multi = Info.Multi,
             DragSelect = Info.Multi and not Library.IsMobile and Info.DragSelect == true,
@@ -9429,6 +9435,35 @@ do
         local PoolSize = math.max(1, Info.MaxVisibleDropdownItems + 2)
         local Pool = {}
         local FilteredEntries = {}
+        local TextWidths = {}
+
+        local function GetListWidth()
+            local Width = DisplayContainer.AbsoluteSize.X / Library.DPIScale
+            if not Info.AutoWidth then
+                return Width
+            end
+
+            for _, Entry in FilteredEntries do
+                local TextWidth = TextWidths[Entry.FormattedValue]
+                if not TextWidth then
+                    TextWidth = Library:GetTextBounds(Entry.FormattedValue, Library.Scheme.Font, 14)
+                    TextWidths[Entry.FormattedValue] = TextWidth
+                end
+
+                local Extra = 16
+                if Entry.ValueImage then
+                    Extra += 18
+                end
+
+                if Entry.IsDivider and Entry.Title then
+                    Extra += 40
+                end
+
+                Width = math.max(Width, TextWidth + Extra)
+            end
+
+            return math.ceil(Width)
+        end
 
         function Dropdown:RecalculateListSize(Count)
             local ItemCount = Count or #FilteredEntries
@@ -9437,7 +9472,7 @@ do
             MenuTable.Menu.CanvasSize = UDim2.fromOffset(0, ItemCount * ItemHeight)
 
             MenuTable:SetSize(function()
-                return UDim2.fromOffset((DisplayContainer.AbsoluteSize.X / Library.DPIScale), Y)
+                return UDim2.fromOffset(GetListWidth(), Y)
             end)
         end
 
@@ -9463,20 +9498,19 @@ do
             local Str = ""
             local ValueImage = nil
             local IsDictionary = not IsSequentialArray(Dropdown.Values)
+            local FormatDisplayValue = Dropdown.FormatDisplayValue or Dropdown.FormatValue
 
             if Info.Multi then
                 for Key, RawValue in Dropdown.Values do
                     local Value = IsDictionary and Key or RawValue
 
-                    if Dropdown.Value[Value] then
+                    if not IsDropdownDivider(RawValue) and Dropdown.Value[Value] then
                         if not ValueImage then
                             ValueImage = GetValueImage(Value, RawValue)
                         end
 
                         Str = Str
-                            .. (Info.FormatDisplayValue and tostring(Info.FormatDisplayValue(RawValue)) or tostring(
-                                RawValue
-                            ))
+                            .. (FormatDisplayValue and tostring(FormatDisplayValue(RawValue)) or tostring(RawValue))
                             .. ", "
                     end
                 end
@@ -9491,13 +9525,14 @@ do
                 ValueImage = GetValueImage(Dropdown.Value, DisplayValue)
                 Str = DisplayValue and tostring(DisplayValue) or ""
 
-                if Str ~= "" and Info.FormatDisplayValue then
-                    Str = tostring(Info.FormatDisplayValue(Str))
+                if Str ~= "" and FormatDisplayValue then
+                    Str = tostring(FormatDisplayValue(Str))
                 end
             end
 
-            if #Str > 25 then
-                Str = Str:sub(1, 22) .. "..."
+            local PlainStr = Str:gsub("<[^>]*>", "")
+            if utf8.len(PlainStr) and utf8.len(PlainStr) > 25 then
+                Str = PlainStr:sub(1, utf8.offset(PlainStr, 23) - 1) .. "..."
             end
 
             DisplayButton.Text = (Str == "" and "---" or Str)
@@ -9542,23 +9577,51 @@ do
             local Values = Dropdown.Values
             local DisabledValues = Dropdown.DisabledValues
             local IsDictionary = not IsSequentialArray(Values)
+            local FormatListValue = Dropdown.FormatListValue or Dropdown.FormatValue
 
             --// Fuzzy-match dropdown values the same way the sidebar search
             --// does, so e.g. "clr" can find "Clear Inventory" in a list \\--
             local SearchQuery = SearchBox and NormalizeSearch(LowerText(SearchBox.Text)) or ""
             local IsSearching = SearchQuery ~= ""
 
-            local EnabledList, DisabledList = {}, {}
-            local Pending = {}
+            local Keys = {}
+            for Key in Values do
+                table.insert(Keys, Key)
+            end
 
-            for Key, RawValue in Values do
+            if not IsDictionary then
+                table.sort(Keys)
+            end
+
+            local Groups = { { Items = {} } }
+            local Count = 0
+
+            for _, Key in Keys do
+                local RawValue = Values[Key]
+
+                if IsDropdownDivider(RawValue) then
+                    if not IsDictionary then
+                        local Title = RawValue.Title and tostring(RawValue.Title) or nil
+
+                        table.insert(Groups, {
+                            Divider = {
+                                IsDivider = true,
+                                Title = Title,
+                                FormattedValue = Title or "",
+                            },
+                            Items = {},
+                        })
+                    end
+
+                    continue
+                end
+
                 local Value = IsDictionary and Key or RawValue
-
-                local FormattedValue = tostring(Info.FormatListValue and Info.FormatListValue(RawValue) or RawValue)
+                local FormattedValue = tostring(FormatListValue and FormatListValue(RawValue) or RawValue)
 
                 local MatchScore = 0
                 if IsSearching then
-                    local Matched, Score = FuzzyScore(LowerText(FormattedValue), SearchQuery)
+                    local Matched, Score = FuzzyScore(LowerText((FormattedValue:gsub("<[^>]*>", ""))), SearchQuery)
                     if not Matched then
                         continue
                     end
@@ -9574,50 +9637,55 @@ do
                     FormattedValue = FormattedValue,
                     IsDisabled = IsDisabled,
                     ValueImage = GetValueImage(Value, RawValue),
-                    SortKey = Key,
                     MatchScore = MatchScore,
-                    Order = #Pending + 1,
+                    Order = Count + 1,
                 }
 
-                table.insert(Pending, Entry)
-            end
-
-            if IsSearching then
-                --// Best matches first; ties fall back to original order \\--
-                table.sort(Pending, function(A, B)
-                    if A.MatchScore ~= B.MatchScore then
-                        return A.MatchScore > B.MatchScore
-                    end
-                    return A.Order < B.Order
-                end)
-            elseif not IsDictionary then
-                table.sort(Pending, function(A, B)
-                    return A.SortKey < B.SortKey
-                end)
+                Count += 1
+                table.insert(Groups[#Groups].Items, Entry)
             end
 
             table.clear(FilteredEntries)
 
-            if Dropdown.KeepDisabledValuePosition then
-                for _, Entry in Pending do
-                    table.insert(FilteredEntries, Entry)
-                end
-                return
-            end
+            for _, Group in Groups do
+                local Items = Group.Items
+                if IsSearching then
+                    if #Items == 0 then
+                        continue
+                    end
 
-            for _, Entry in Pending do
-                if Entry.IsDisabled then
-                    table.insert(DisabledList, Entry)
-                else
-                    table.insert(EnabledList, Entry)
+                    --// Best matches first; ties fall back to original order \\--
+                    table.sort(Items, function(A, B)
+                        if A.MatchScore ~= B.MatchScore then
+                            return A.MatchScore > B.MatchScore
+                        end
+                        return A.Order < B.Order
+                    end)
                 end
-            end
 
-            for _, Entry in EnabledList do
-                table.insert(FilteredEntries, Entry)
-            end
-            for _, Entry in DisabledList do
-                table.insert(FilteredEntries, Entry)
+                if Group.Divider then
+                    table.insert(FilteredEntries, Group.Divider)
+                end
+
+                if Dropdown.KeepDisabledValuePosition then
+                    for _, Entry in Items do
+                        table.insert(FilteredEntries, Entry)
+                    end
+
+                    continue
+                end
+
+                for _, Entry in Items do
+                    if not Entry.IsDisabled then
+                        table.insert(FilteredEntries, Entry)
+                    end
+                end
+
+                for _, Entry in Items do
+                    if Entry.IsDisabled then
+                        table.insert(FilteredEntries, Entry)
+                    end
+                end
             end
         end
 
@@ -9657,6 +9725,28 @@ do
                 Row.Corner.BottomLeftRadius = IsLast and UDim.new(0, Library.CornerRadius / 2) or UDim.new(0, 0)
 
                 Row.Button.Text = Entry.FormattedValue
+                Row.Button.TextXAlignment = Entry.IsDivider and Enum.TextXAlignment.Center or Enum.TextXAlignment.Left
+                Row.LeftLine.Visible = Entry.IsDivider == true
+                Row.RightLine.Visible = Entry.IsDivider == true and Entry.Title ~= nil
+
+                if Entry.IsDivider then
+                    Row.Image.Visible = false
+                    Row.Button.Size = UDim2.new(1, 0, 0, ItemHeight - 1)
+                    Row.Button.Position = UDim2.fromOffset(0, 0)
+
+                    if Entry.Title then
+                        local TitleWidth = Library:GetTextBounds(Entry.Title, Library.Scheme.Font, 14)
+                        local HalfWidth = TitleWidth // 2 + 10
+
+                        Row.LeftLine.Size = UDim2.new(0.5, -7 - HalfWidth, 0, 2)
+                        Row.RightLine.Size = UDim2.new(0.5, -7 - HalfWidth, 0, 2)
+                    else
+                        Row.LeftLine.Size = UDim2.new(1, -14, 0, 2)
+                    end
+
+                    Row:UpdateButton()
+                    continue
+                end
 
                 if Entry.ValueImage then
                     Row.Image = Library:ApplyIcon(Row.Image, Entry.ValueImage)
@@ -9709,7 +9799,7 @@ do
 
         local function ApplyDragIndex(Index, InRange)
             local Entry = FilteredEntries[Index]
-            if not Entry or Entry.IsDisabled then
+            if not Entry or Entry.IsDisabled or Entry.IsDivider then
                 return
             end
 
@@ -9808,6 +9898,7 @@ do
             local Button = New("TextButton", {
                 BackgroundTransparency = 1,
                 Size = UDim2.new(1, 0, 0, ItemHeight),
+                RichText = true,
                 Text = "",
                 TextSize = 14,
                 TextTransparency = 0.5,
@@ -9820,14 +9911,42 @@ do
                 Parent = Button,
             })
 
+            local LeftLine = New("Frame", {
+                BackgroundColor3 = "MainColor",
+                BorderColor3 = "OutlineColor",
+                BorderSizePixel = 1,
+                Position = UDim2.fromOffset(7, (ItemHeight - 1) / 2 - 1),
+                Visible = false,
+                Parent = Container,
+            })
+
+            local RightLine = New("Frame", {
+                AnchorPoint = Vector2.new(1, 0),
+                BackgroundColor3 = "MainColor",
+                BorderColor3 = "OutlineColor",
+                BorderSizePixel = 1,
+                Position = UDim2.new(1, -7, 0, (ItemHeight - 1) / 2 - 1),
+                Visible = false,
+                Parent = Container,
+            })
+
             Row.Container = Container
             Row.Corner = Corner
             Row.Image = Image
             Row.Button = Button
+            Row.LeftLine = LeftLine
+            Row.RightLine = RightLine
 
             function Row:UpdateButton()
                 local Entry = Row.Entry
                 if not Entry then
+                    return
+                end
+
+                if Entry.IsDivider then
+                    Row.Selected = false
+                    Container.BackgroundTransparency = 1
+                    Button.TextTransparency = 0.5
                     return
                 end
 
@@ -9851,13 +9970,11 @@ do
                 end
             end
 
-            table.insert(
-                Dropdown.Connections,
-                Button.MouseButton1Click:Connect(function()
-                    local Entry = Row.Entry
-                    if not Entry or Entry.IsDisabled or DragSelecting then
-                        return
-                    end
+            table.insert(Dropdown.Connections, Button.MouseButton1Click:Connect(function()
+                local Entry = Row.Entry
+                if not Entry or Entry.IsDisabled or Entry.IsDivider or DragSelecting then
+                    return
+                end
 
                     local Selected
                     if Info.Multi then
@@ -9888,13 +10005,11 @@ do
                 end)
             )
 
-            table.insert(
-                Dropdown.Connections,
-                Button.MouseEnter:Connect(function()
-                    local Entry = Row.Entry
-                    if not Entry or Entry.IsDisabled then
-                        return
-                    end
+            table.insert(Dropdown.Connections, Button.MouseEnter:Connect(function()
+                local Entry = Row.Entry
+                if not Entry or Entry.IsDisabled or Entry.IsDivider then
+                    return
+                end
 
                     if Row.Selected then
                         return
@@ -10028,6 +10143,10 @@ do
         )
 
         local function ValueExists(Val)
+            if IsDropdownDivider(Val) then
+                return false
+            end
+
             if IsSequentialArray(Dropdown.Values) then
                 for _, Existing in Dropdown.Values do
                     if Existing == Val then
@@ -11517,9 +11636,14 @@ function Library:SetBackgroundImage(Image: string | number)
     Library:UpdateColorsUsingRegistry()
 end
 
+local function GetNotifySide(): (boolean, boolean)
+    local Side = tostring(Library.NotifySide):lower()
+    return Side:find("left") ~= nil, Side:find("bottom") ~= nil
+end
+
 function Library:UpdateNotificationPositions(Snap: boolean?)
-    local IsLeft = Library.NotifySide:lower() == "left"
-    local XScale = IsLeft and 0 or 1
+    local IsLeft, IsBottom = GetNotifySide()
+    local XScale, YScale, YSign = IsLeft and 0 or 1, IsBottom and 1 or 0, IsBottom and -1 or 1
     local RunningY = 0
 
     for _, FakeBackground in NotifyOrder do
@@ -11528,7 +11652,7 @@ function Library:UpdateNotificationPositions(Snap: boolean?)
             continue
         end
 
-        local Target = UDim2.new(XScale, 0, 0, RunningY)
+        local Target = UDim2.new(XScale, 0, YScale, RunningY * YSign)
         if Snap or not Data.PositionInitialized then
             FakeBackground.Position = Target
             Data.PositionInitialized = true
@@ -11542,17 +11666,13 @@ function Library:UpdateNotificationPositions(Snap: boolean?)
     end
 end
 
-function Library:SetNotifySide(Side: string)
+function Library:SetNotifySide(Side: "Left" | "Right" | "TopLeft" | "TopRight" | "BottomLeft" | "BottomRight" | string)
     Library.NotifySide = Side
 
-    local IsLeft = Side:lower() == "left"
-    if IsLeft then
-        NotificationArea.AnchorPoint = Vector2.new(0, 0)
-        NotificationArea.Position = UDim2.fromOffset(6, 6)
-    else
-        NotificationArea.AnchorPoint = Vector2.new(1, 0)
-        NotificationArea.Position = UDim2.new(1, -6, 0, 6)
-    end
+    local IsLeft, IsBottom = GetNotifySide()
+    local Anchor = Vector2.new(IsLeft and 0 or 1, IsBottom and 1 or 0)
+    NotificationArea.AnchorPoint = Anchor
+    NotificationArea.Position = UDim2.new(Anchor.X, IsLeft and 6 or -6, Anchor.Y, IsBottom and -6 or 6)
 
     for FakeBackground in Library.Notifications do
         if not (FakeBackground and FakeBackground.Parent) then
@@ -11609,8 +11729,9 @@ function Library:Notify(...)
         end)
     end
 
+    local IsLeft, IsBottom = GetNotifySide()
     local FakeBackground = New("Frame", {
-        AnchorPoint = Library.NotifySide:lower() == "left" and Vector2.new(0, 0) or Vector2.new(1, 0),
+        AnchorPoint = Vector2.new(IsLeft and 0 or 1, IsBottom and 1 or 0),
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundTransparency = 1,
         Size = UDim2.fromOffset(0, 0),
@@ -11621,7 +11742,7 @@ function Library:Notify(...)
     local Holder = New("Frame", {
         AutomaticSize = Enum.AutomaticSize.Y,
         BackgroundColor3 = "MainColor",
-        Position = Library.NotifySide:lower() == "left" and UDim2.new(-1, -8, 0, 0) or UDim2.new(1, 8, 0, 0),
+        Position = IsLeft and UDim2.new(-1, -8, 0, 0) or UDim2.new(1, 8, 0, 0),
         Size = UDim2.new(1, 0, 0, 0),
         ZIndex = 5,
         Parent = FakeBackground,
@@ -11874,7 +11995,7 @@ function Library:Notify(...)
 
         TweenService
             :Create(Holder, Library.NotifyTweenInfo, {
-                Position = Library.NotifySide:lower() == "left" and UDim2.new(-1, -8, 0, -2) or UDim2.new(1, 8, 0, -2),
+                Position = GetNotifySide() and UDim2.new(-1, -8, 0, -2) or UDim2.new(1, 8, 0, -2),
             })
             :Play()
 
@@ -13335,7 +13456,8 @@ function Library:CreateWindow(WindowInfo)
 
     function Window:ShowTabInfo(Name, Description)
         CurrentTabLabel.Text = Name
-        CurrentTabDescription.Text = Description
+        CurrentTabDescription.Text = Description or ""
+        CurrentTabDescription.Visible = typeof(Description) == "string" and Description ~= ""
 
         if IsDefaultSearchbarSize then
             SearchBox.Size = UDim2.fromScale(0.5, 1)
@@ -13350,12 +13472,13 @@ function Library:CreateWindow(WindowInfo)
         end
     end
 
-    function Window:AddTab(...)
+    local function CreateTab(ParentTab, ...)
         local Name = nil
         local Icon = nil
         local Description = nil
         local Tooltip = nil
         local Order = nil
+        local HasSubTabs = false
 
         if select("#", ...) == 1 and typeof(...) == "table" then
             local Info = select(1, ...)
@@ -13364,6 +13487,7 @@ function Library:CreateWindow(WindowInfo)
             Description = Info.Description
             Tooltip = Info.Tooltip
             Order = Info.Order
+            HasSubTabs = Info.SubTabs == true and ParentTab == nil
         else
             Name = select(1, ...)
             Icon = select(2, ...)
@@ -13372,11 +13496,14 @@ function Library:CreateWindow(WindowInfo)
         end
 
         if not tonumber(Order) then
-            Order = #Tabs:GetChildren()
+            Order = if ParentTab then ParentTab.SubTabCount + 1 else #Tabs:GetChildren()
         end
+
+        local TabKey = if ParentTab then ParentTab.Name .. "/" .. Name else Name
 
         local TabButton: TextButton
         local TabIndicator
+        local TabStroke
         local TabLabel
         local TabIcon
 
@@ -13384,8 +13511,72 @@ function Library:CreateWindow(WindowInfo)
         local TabLeft
         local TabRight
 
+        local SubTabBar
+        local SubTabHolder
+
         Icon = Library:GetCustomIcon(Icon)
-        do
+        if ParentTab then
+            TabButton = New("TextButton", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundColor3 = "MainColor",
+                LayoutOrder = Order,
+                Size = UDim2.fromScale(0, 1),
+                Text = "",
+                Parent = ParentTab.SubTabBar,
+            })
+            table.insert(
+                Library.Corners,
+                New("UICorner", {
+                    CornerRadius = UDim.new(0, Library.CornerRadius / 2),
+                    Parent = TabButton,
+                })
+            )
+
+            TabStroke = New("UIStroke", {
+                Color = "OutlineColor",
+                Parent = TabButton,
+            })
+            Library:AddToRegistry(TabStroke, {
+                Color = function()
+                    return if ParentTab.ActiveSubTab and ParentTab.ActiveSubTab.Button == TabButton then Library.Scheme.AccentColor else Library.Scheme.OutlineColor
+                end,
+            })
+
+            New("UIPadding", {
+                PaddingLeft = UDim.new(0, 8),
+                PaddingRight = UDim.new(0, 8),
+                Parent = TabButton,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                Padding = UDim.new(0, 6),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Parent = TabButton,
+            })
+
+            if Icon then
+                TabIcon = Library:CreateIcon(Icon, {
+                    ImageColor3 = Icon.Custom and "WhiteColor" or "AccentColor",
+                    ImageTransparency = 0.5,
+                    LayoutOrder = 1,
+                    Size = UDim2.fromOffset(16, 16),
+                    Parent = TabButton,
+                })
+            end
+
+            TabLabel = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                LayoutOrder = 2,
+                Size = UDim2.fromOffset(0, 16),
+                Text = Name,
+                TextSize = 14,
+                TextTransparency = 0.5,
+                Parent = TabButton,
+            })
+        else
             TabButton = New("TextButton", {
                 BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 1,
@@ -13454,18 +13645,55 @@ function Library:CreateWindow(WindowInfo)
                 Padding = ButtonPadding,
                 Icon = TabIcon,
             })
+        end
 
-            --// Tab Container \\--
-            TabContainer = New("Frame", {
-                BackgroundColor3 = function()
-                    return Library:GetBetterColor(Library.Scheme.BackgroundColor, 1)
-                end,
-                Position = UDim2.fromScale(0, 0),
-                Size = UDim2.fromScale(1, 1),
-                Visible = false,
-                Parent = Container,
+        --// Tab Container \\--
+        TabContainer = New("Frame", {
+            BackgroundTransparency = 1,
+            Position = UDim2.fromScale(0, 0),
+            Size = UDim2.fromScale(1, 1),
+            Visible = false,
+            Parent = if ParentTab then ParentTab.SubTabHolder else Container,
+        })
+
+        if HasSubTabs then
+            SubTabBar = New("ScrollingFrame", {
+                AutomaticCanvasSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                CanvasSize = UDim2.fromScale(0, 0),
+                Position = UDim2.fromOffset(2, 5),
+                ScrollBarThickness = 0,
+                ScrollingDirection = Enum.ScrollingDirection.X,
+                Size = UDim2.new(1, -4, 0, 30),
+                Parent = TabContainer,
+            })
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                Padding = UDim.new(0, 8),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                Parent = SubTabBar,
+            })
+            New("UIPadding", {
+                PaddingBottom = UDim.new(0, 3),
+                PaddingLeft = UDim.new(0, 1),
+                PaddingRight = UDim.new(0, 1),
+                PaddingTop = UDim.new(0, 3),
+                Parent = SubTabBar,
             })
 
+            Library:MakeLine(TabContainer, {
+                Position = UDim2.fromOffset(-6, 40),
+                Size = UDim2.new(1, 12, 0, 1),
+            })
+
+            SubTabHolder = New("Frame", {
+                BackgroundTransparency = 1,
+                ClipsDescendants = true,
+                Position = UDim2.fromOffset(0, 41),
+                Size = UDim2.new(1, 0, 1, -41),
+                Parent = TabContainer,
+            })
+        else
             TabLeft = New("ScrollingFrame", {
                 AutomaticCanvasSize = Enum.AutomaticSize.Y,
                 BackgroundTransparency = 1,
@@ -13547,6 +13775,9 @@ function Library:CreateWindow(WindowInfo)
             Destroyed = false,
 
             Window = Window,
+            ParentTab = ParentTab,
+            IsSubTab = ParentTab ~= nil,
+
             Button = TabButton,
             Container = TabContainer,
             Sides = {
@@ -13564,6 +13795,16 @@ function Library:CreateWindow(WindowInfo)
             Groupboxes = {},
             Tabboxes = {},
             DependencyGroupboxes = {},
+
+            --// Sub Tabs \\--
+            HasSubTabs = HasSubTabs,
+            SubTabBar = SubTabBar,
+            SubTabHolder = SubTabHolder,
+
+            SubTabs = {},
+            SubTabCount = 0,
+            ActiveSubTab = nil,
+            PreviousSubTab = nil,
         }
 
         --// Warning Box \\--
@@ -13682,6 +13923,10 @@ function Library:CreateWindow(WindowInfo)
 
         --// Tab Handlers \\--
         function Tab:UpdateWarningBox(Info)
+            if HasSubTabs then
+                error(string.format("Tab '%s' uses SubTabs, update the warning box of a subtab instead", Name))
+            end
+
             if typeof(Info.IsNormal) == "boolean" then
                 Tab.WarningBox.IsNormal = Info.IsNormal
             end
@@ -13711,12 +13956,25 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:RefreshSides()
-            local Offset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
-            for _, Side in Tab.Sides do
-                Side.Position = UDim2.new(Side.Position.X.Scale, 0, 0, Offset)
-                Side.Size = UDim2.new(0.5, -3, 1, -Offset)
+            if HasSubTabs then
+                if Tab.ActiveSubTab then
+                    Tab.ActiveSubTab:RefreshSides()
+                end
+
+                return
             end
+
+            local Offset = WarningBoxHolder.Visible and WarningBox.Size.Y.Offset + 8 or 0
+            local Width = TabContainer.AbsoluteSize.X / Library.DPIScale
+            local LeftWidth = math.floor(Width / 2 - 3)
+
+            TabLeft.Position = UDim2.fromOffset(0, Offset)
+            TabLeft.Size = UDim2.new(0, LeftWidth, 1, -Offset)
+
+            TabRight.Position = UDim2.new(1, 0, 0, Offset)
+            TabRight.Size = UDim2.new(0, Width - LeftWidth - 6, 1, -Offset)
         end
+        table.insert(Tab.Connections, TabContainer:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() Tab:RefreshSides() end))
 
         function Tab:Resize(ResizeWarningBox: boolean?)
             if ResizeWarningBox then
@@ -14147,7 +14405,13 @@ function Library:CreateWindow(WindowInfo)
             return Tabbox
         end
 
-        Tab.AddTabbox = AddTabbox
+        Tab.AddTabbox = function(self, Info)
+            if HasSubTabs then
+                error(string.format("Tab '%s' uses SubTabs, add tabboxes to a subtab instead", Name))
+            end
+
+            return AddTabbox(self, Info)
+        end
 
         --// Deprecated - Use Tab:AddTabbox instead.
         function Tab:AddLeftTabbox(Name)
@@ -14160,6 +14424,10 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:AddGroupbox(Info)
+            if HasSubTabs then
+                error(string.format("Tab '%s' uses SubTabs, add groupboxes to a subtab instead", Name))
+            end
+
             Info = Library:Validate(Info, Templates.Groupbox)
 
             if typeof(Info.Side) == "string" then
@@ -14425,6 +14693,7 @@ function Library:CreateWindow(WindowInfo)
             )
 
             function Groupbox:SetDescription(Description: string | nil)
+                Groupbox.Description = Description
                 GroupboxDescription.Text = Description or ""
                 GroupboxDescription.Visible = (Description ~= nil)
 
@@ -14624,8 +14893,16 @@ function Library:CreateWindow(WindowInfo)
             })
         end
 
+        local function IsActive()
+            if ParentTab then
+                return ParentTab.ActiveSubTab == Tab
+            end
+
+            return Library.ActiveTab == Tab
+        end
+
         function Tab:Hover(Hovering)
-            if Library.ActiveTab == Tab then
+            if IsActive() then
                 return
             end
 
@@ -14637,7 +14914,92 @@ function Library:CreateWindow(WindowInfo)
             end
         end
 
-        function Tab:Show()
+        function Tab:UpdateTabInfo()
+            local SubTab = Tab.ActiveSubTab
+            if SubTab then
+                local Title = string.format('<font transparency="0.5">%s /</font> <b>%s</b>', Name, SubTab.Name)
+                Window:ShowTabInfo(Title, SubTab.Description or Description)
+            elseif Description then
+                Window:ShowTabInfo(Name, Description)
+            else
+                Window:HideTabInfo()
+            end
+        end
+
+        local function SetButtonActive(Active: boolean)
+            if TabStroke then
+                local StrokeTween = TweenService:Create(TabStroke, Library.TweenInfo, {
+                    Color = Active and Library.Scheme.AccentColor or Library.Scheme.OutlineColor,
+                })
+
+                local Connection; Connection = StrokeTween.Completed:Connect(function(PlaybackState)
+                    Connection:Disconnect()
+                    if PlaybackState ~= Enum.PlaybackState.Completed or not Library.Registry[TabStroke] then
+                        return
+                    end
+
+                    TabStroke.Color = Library.Registry[TabStroke].Color()
+                end)
+
+                StrokeTween:Play()
+            else
+                TweenService:Create(TabButton, Library.TweenInfo, {
+                    BackgroundTransparency = Active and 0 or 1,
+                }):Play()
+            end
+            if TabIndicator then
+                TweenService:Create(TabIndicator, Library.TweenInfo, {
+                    BackgroundTransparency = Active and 0 or 1,
+                }):Play()
+            end
+            TweenService:Create(TabLabel, Library.TweenInfo, {
+                TextTransparency = Active and 0 or 0.5,
+            }):Play()
+            if TabIcon then
+                TweenIcon(TabIcon, { ImageTransparency = Active and 0 or 0.5 })
+            end
+        end
+
+        function Tab:Show(KeepParent: boolean?)
+            if ParentTab then
+                if ParentTab.ActiveSubTab == Tab then
+                    if not KeepParent and Library.ActiveTab ~= ParentTab then
+                        ParentTab:Show()
+                    end
+
+                    return
+                end
+
+                local ParentActive = Library.ActiveTab == ParentTab
+                if ParentTab.ActiveSubTab then
+                    ParentTab.ActiveSubTab:Hide()
+                end
+
+                ParentTab.ActiveSubTab = Tab
+                ParentTab.Sides = Tab.Sides
+                SetButtonActive(true)
+
+                if ParentActive then
+                    Library:PlayTabAnimation(Tab, true, nil, ParentTab.PreviousSubTab)
+                    Tab:RefreshSides()
+                    ParentTab:UpdateTabInfo()
+
+                    if Library.Searching then
+                        Library:UpdateSearch(Library.SearchText)
+                    end
+                else
+                    TabContainer.Position = UDim2.fromScale(0, 0)
+                    TabContainer.Visible = true
+                    Tab:RefreshSides()
+
+                    if not KeepParent then
+                        ParentTab:Show()
+                    end
+                end
+
+                return
+            end
+
             if Library.ActiveTab == Tab then
                 return
             end
@@ -14646,24 +15008,8 @@ function Library:CreateWindow(WindowInfo)
                 Library.ActiveTab:Hide()
             end
 
-            TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 0,
-            }):Play()
-            if TabIndicator then
-                TweenService:Create(TabIndicator, Library.TweenInfo, {
-                    BackgroundTransparency = 0,
-                }):Play()
-            end
-            TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = 0,
-            }):Play()
-            if TabIcon then
-                TweenIcon(TabIcon, { ImageTransparency = 0 })
-            end
-
-            if Description then
-                Window:ShowTabInfo(Name, Description)
-            end
+            SetButtonActive(true)
+            Tab:UpdateTabInfo()
 
             Library:PlayTabAnimation(Tab, true)
             Tab:RefreshSides()
@@ -14676,22 +15022,18 @@ function Library:CreateWindow(WindowInfo)
         end
 
         function Tab:Hide()
-            TweenService:Create(TabButton, Library.TweenInfo, {
-                BackgroundTransparency = 1,
-            }):Play()
+            SetButtonActive(false)
 
-            if TabIndicator then
-                TweenService:Create(TabIndicator, Library.TweenInfo, {
-                    BackgroundTransparency = 1,
-                }):Play()
-            end
+            if ParentTab then
+                Library:PlayTabAnimation(Tab, false)
 
-            TweenService:Create(TabLabel, Library.TweenInfo, {
-                TextTransparency = 0.5,
-            }):Play()
+                ParentTab.PreviousSubTab = Tab
+                if ParentTab.ActiveSubTab == Tab then
+                    ParentTab.ActiveSubTab = nil
+                    ParentTab.Sides = {}
+                end
 
-            if TabIcon then
-                TweenIcon(TabIcon, { ImageTransparency = 0.5 })
+                return
             end
 
             Library:PlayTabAnimation(Tab, false)
@@ -14704,9 +15046,36 @@ function Library:CreateWindow(WindowInfo)
         function Tab:SetVisible(Visible: boolean)
             TabButton.Visible = Visible
 
-            if not Visible and Library.ActiveTab == Tab then
-                Tab:Hide()
+            if Visible or not IsActive() then
+                return
             end
+
+            Tab:Hide()
+
+            if ParentTab then
+                for _, SubTab in ParentTab.SubTabs do
+                    if SubTab ~= Tab and SubTab.Button.Visible then
+                        SubTab:Show()
+                        break
+                    end
+                end
+            end
+        end
+
+        function Tab:AddSubTab(...)
+            if not HasSubTabs then
+                error(string.format("Tab '%s' was not created with SubTabs = true", Name))
+            end
+
+            local SubTab = CreateTab(Tab, ...)
+            Tab.SubTabCount += 1
+            table.insert(Tab.SubTabs, SubTab)
+
+            if not Tab.ActiveSubTab then
+                SubTab:Show(true)
+            end
+
+            return SubTab
         end
 
         function Tab:SetOrder(NewOrder: number)
@@ -14761,6 +15130,35 @@ function Library:CreateWindow(WindowInfo)
                 end
             end
 
+            for Index = #Tab.SubTabs, 1, -1 do
+                local SubTab = Tab.SubTabs[Index]
+                if SubTab and not SubTab.Destroyed then
+                    SubTab:Destroy()
+                end
+            end
+            table.clear(Tab.SubTabs)
+
+            if ParentTab then
+                local SubIndex = table.find(ParentTab.SubTabs, Tab)
+                if SubIndex then
+                    table.remove(ParentTab.SubTabs, SubIndex)
+                end
+
+                if ParentTab.ActiveSubTab == Tab then
+                    ParentTab.ActiveSubTab = nil
+                    ParentTab.Sides = {}
+
+                    local NextSubTab = ParentTab.SubTabs[1]
+                    if NextSubTab then
+                        NextSubTab:Show(true)
+                    end
+
+                    if Library.ActiveTab == ParentTab then
+                        ParentTab:UpdateTabInfo()
+                    end
+                end
+            end
+
             if TabContainer then
                 TabContainer:Destroy()
             end
@@ -14776,7 +15174,7 @@ function Library:CreateWindow(WindowInfo)
                 TabButton:Destroy()
             end
 
-            Library.Tabs[Name] = nil
+            Library.Tabs[TabKey] = nil
         end
 
         --// Execution \\--
@@ -14784,7 +15182,7 @@ function Library:CreateWindow(WindowInfo)
             Tab.TooltipTable = Library:AddTooltip(Tooltip, nil, TabButton)
         end
 
-        if not Library.ActiveTab then
+        if not ParentTab and not Library.ActiveTab then
             Tab:Show()
         end
 
@@ -14794,11 +15192,17 @@ function Library:CreateWindow(WindowInfo)
         TabButton.MouseLeave:Connect(function()
             Tab:Hover(false)
         end)
-        TabButton.MouseButton1Click:Connect(Tab.Show)
+        TabButton.MouseButton1Click:Connect(function()
+            Tab:Show()
+        end)
 
-        Library.Tabs[Name] = Tab
+        Library.Tabs[TabKey] = Tab
 
         return Tab
+    end
+
+    function Window:AddTab(...)
+        return CreateTab(nil, ...)
     end
 
     function Window:AddKeyTab(...)
@@ -15992,31 +16396,6 @@ function Library:CreateWindow(WindowInfo)
         return Dialog
     end
 
-    local GuiProperties = { "BackgroundTransparency" }
-    local ImageProperties = { "BackgroundTransparency", "ImageTransparency" }
-    local TextProperties = { "BackgroundTransparency", "TextTransparency" }
-    local StrokeProperties = { "Transparency" }
-
-    local function FadeInstance(Desc, Properties)
-        local Cache = TransparencyCache[Desc]
-        if not Cache then
-            Cache = {}
-            TransparencyCache[Desc] = Cache
-        end
-
-        for _, Prop in Properties do
-            if not Library.Toggled then
-                Cache[Prop] = Desc[Prop]
-            end
-
-            if Cache[Prop] ~= nil and Cache[Prop] ~= 1 then
-                TweenService:Create(Desc, Library.WindowAnimationInfo, {
-                    [Prop] = Library.Toggled and Cache[Prop] or 1,
-                }):Play()
-            end
-        end
-    end
-
     function Window:Toggle(Value: boolean?)
         if Fading then
             return
@@ -16039,42 +16418,36 @@ function Library:CreateWindow(WindowInfo)
         end
 
         if Library.Animations and Library.Animations.ToggleWindow == true then
-            local FadeTime = Library.WindowAnimationInfo.Time
+            local Toggled = Library.Toggled
             Fading = true
 
-            if Library.Toggled then
-                MainFrame.Visible = true
-            end
+            local FadeGroup = New("CanvasGroup", {
+                BackgroundTransparency = 1,
+                GroupTransparency = Toggled and 1 or 0,
+                Name = "MainFade",
+                Size = UDim2.fromScale(1, 1),
+                ZIndex = MainFrame.ZIndex,
+                Parent = ScreenGui,
+            })
 
-            if Library.Toggled then
-                FadeInstance(MainFrame, { "BackgroundTransparency" })
-                task.wait(FadeTime / 2)
-            else
-                task.delay(FadeTime / 2, FadeInstance, MainFrame, { "BackgroundTransparency" })
-            end
+            MainFrame.Visible = true
+            MainFrame.Parent = FadeGroup
 
-            for _, Instance in MainFrame:GetDescendants() do
-                if Instance == TopBar then
-                    continue
-                end
+            task.spawn(function()
+                RunService.Heartbeat:Wait()
+                RunService.Heartbeat:Wait()
 
-                if Instance:IsA("GuiObject") then
-                    local ClassName = Instance.ClassName
-                    if ClassName == "ImageLabel" or ClassName == "ImageButton" then
-                        FadeInstance(Instance, ImageProperties)
-                    elseif ClassName == "TextLabel" or ClassName == "TextBox" or ClassName == "TextButton" then
-                        FadeInstance(Instance, TextProperties)
-                    else
-                        FadeInstance(Instance, GuiProperties)
-                    end
-                elseif Instance.ClassName == "UIStroke" then
-                    FadeInstance(Instance, StrokeProperties)
-                end
-            end
+                TweenService:Create(FadeGroup, Library.WindowAnimationInfo, { GroupTransparency = Toggled and 0 or 1 }):Play()
+                task.wait(Library.WindowAnimationInfo.Time)
 
-            task.delay(FadeTime, function()
-                MainFrame.Visible = Library.Toggled
                 Fading = false
+                if Library.Unloaded then
+                    return
+                end
+
+                MainFrame.Visible = Library.Toggled
+                MainFrame.Parent = ScreenGui
+                FadeGroup:Destroy()
             end)
         else
             MainFrame.Visible = Library.Toggled
@@ -17113,7 +17486,6 @@ function Library:Unload()
     table.clear(Library.KeybindToggles)
     table.clear(Library.DependencyBoxes)
 
-    table.clear(TransparencyCache)
     table.clear(ActiveTabTweens)
     table.clear(Library.SnowParticles)
 
