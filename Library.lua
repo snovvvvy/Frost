@@ -10,6 +10,7 @@ local UserInputService: UserInputService = cloneref(game:GetService("UserInputSe
 local TextService: TextService = cloneref(game:GetService("TextService"))
 local Teams: Teams = cloneref(game:GetService("Teams"))
 local TweenService: TweenService = cloneref(game:GetService("TweenService"))
+local HttpService: HttpService = cloneref(game:GetService("HttpService"))
 local Lighting: Lighting = cloneref(game:GetService("Lighting"))
 
 local getgenv = getgenv or function()
@@ -267,6 +268,9 @@ local Library = {
     ProfileCard = true, -- set to false to hide the sidebar profile card and get the old tabs list back
     ProfileTagline = nil, -- optional string shown under the username in the profile card
     ProfileTaglineColor = nil, -- optional Color3 (or scheme name like "FontColor") for the tagline, defaults to AccentColor
+    PlayersOnlineLabel = true, -- set to false to hide the "players online" label above the profile card
+    PlayersOnlineUrl = "https://script-loader-one.vercel.app/api/player/count", -- JSON endpoint returning { "count": number }
+    PlayersOnlineInterval = 3, -- seconds between player count refreshes while the window is open (minimum 3)
 
     --// Snow Effect \\--
     SnowEffect = false,
@@ -12188,7 +12192,25 @@ function Library:CreateWindow(WindowInfo)
 
         return Lines
     end
-    local function GetProfileHeight()
+    --// Height of the "players online" section alone \\--
+    local function GetPlayersSectionHeight()
+        if Library.PlayersOnlineLabel ~= true then
+            return 0
+        end
+
+        return math.ceil(14 * (Library.FontScale or 1)) + 10
+    end
+    --// Space the players section takes above the profile section: the section plus the 1px divider,
+    --// or plus the shell's 6px bottom spacing when it's the only section showing \\--
+    local function GetPlayersRowHeight()
+        local Section = GetPlayersSectionHeight()
+        if Section == 0 then
+            return 0
+        end
+
+        return Section + (Library.ProfileCard == true and 1 or 6)
+    end
+    local function GetCardHeight()
         if Library.ProfileCard ~= true then
             return 0
         end
@@ -12197,6 +12219,10 @@ function Library:CreateWindow(WindowInfo)
         local Extra = math.ceil(((Library.FontScale or 1) - 1) * 15 * Lines)
 
         return ProfileCardHeights[Lines] + Extra + 6
+    end
+    --// Total height of the sidebar footer (players online row + profile card) \\--
+    local function GetProfileHeight()
+        return GetPlayersRowHeight() + GetCardHeight()
     end
     local ProfileHeight = GetProfileHeight()
     local RefreshProfile = function() end
@@ -12973,23 +12999,215 @@ function Library:CreateWindow(WindowInfo)
                 Parent = MainFrame,
             })
 
-            local Card = New("Frame", {
+            --// One shared shell draws the background, outline and corners behind both the players online
+            --// section and the profile section, so they read as a single connected card \\--
+            local Shell = New("Frame", {
                 AnchorPoint = Vector2.new(0.5, 0),
                 BackgroundColor3 = "MainColor",
                 BackgroundTransparency = 0.4,
+                Name = "Shell",
                 Position = UDim2.new(0.5, 0, 0, 0),
                 Size = UDim2.new(1, -CardPadding * 2, 1, -6),
                 Parent = ProfileHolder,
             })
             New("UICorner", {
                 CornerRadius = UDim.new(0, math.min(TabButtonsStyle.CornerRadius, 10)),
-                Parent = Card,
+                Parent = Shell,
             })
             New("UIStroke", {
                 Color = "OutlineColor",
                 Thickness = 1,
                 Transparency = 0.5,
-                Parent = Card,
+                Parent = Shell,
+            })
+            --// Hairline between the two sections, same color as the outline so it looks like part of the card \\--
+            local ShellDivider = New("Frame", {
+                BackgroundColor3 = "OutlineColor",
+                BackgroundTransparency = 0.5,
+                Position = UDim2.fromOffset(0, GetPlayersSectionHeight()),
+                Size = UDim2.new(1, 0, 0, 1),
+                Parent = Shell,
+            })
+
+            --// Players online section (top of the shell) \\--
+            local PlayersCard = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0),
+                BackgroundTransparency = 1,
+                Name = "PlayersOnline",
+                Position = UDim2.new(0.5, 0, 0, 0),
+                Size = UDim2.new(1, -CardPadding * 2, 0, GetPlayersSectionHeight()),
+                Parent = ProfileHolder,
+            })
+            --// Dot, count and suffix are laid out as one group centered in the card \\--
+            New("UIListLayout", {
+                FillDirection = Enum.FillDirection.Horizontal,
+                HorizontalAlignment = Enum.HorizontalAlignment.Center,
+                Padding = UDim.new(0, 6),
+                SortOrder = Enum.SortOrder.LayoutOrder,
+                VerticalAlignment = Enum.VerticalAlignment.Center,
+                Parent = PlayersCard,
+            })
+
+            local OnlineColor = Color3.fromRGB(67, 181, 129)
+            --// Holder reserves layout room for the dot only; the glow layers overflow it so the text never shifts.
+            --// All sizes are even (8 / 14 / 10 / 6) so every circle shares the exact same pixel center \\--
+            local PlayersDotHolder = New("Frame", {
+                BackgroundTransparency = 1,
+                LayoutOrder = 1,
+                Size = UDim2.fromOffset(8, 8),
+                Parent = PlayersCard,
+            })
+            local function GlowLayer(Size)
+                local Layer = New("Frame", {
+                    AnchorPoint = Vector2.new(0.5, 0.5),
+                    BackgroundColor3 = OnlineColor,
+                    BackgroundTransparency = 1,
+                    Position = UDim2.fromScale(0.5, 0.5),
+                    Size = UDim2.fromOffset(Size, Size),
+                    Parent = PlayersDotHolder,
+                })
+                New("UICorner", {
+                    CornerRadius = UDim.new(1, 0),
+                    Parent = Layer,
+                })
+
+                return Layer
+            end
+            --// Two stacked layers fake a soft falloff, which reads as a glow instead of a hard-edged disc \\--
+            local PlayersGlowOuter = GlowLayer(14)
+            local PlayersGlowInner = GlowLayer(10)
+            local PlayersDot = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundColor3 = OnlineColor,
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.fromOffset(6, 6),
+                Parent = PlayersDotHolder,
+            })
+            New("UICorner", {
+                CornerRadius = UDim.new(1, 0),
+                Parent = PlayersDot,
+            })
+
+            --// "Live" glow: breathes in and out on a cosine curve. Only transparency animates (never size),
+            --// since sizes snap to whole pixels and make small circles jitter. The curve has zero slope at both
+            --// ends, so there's no visible restart, and it's driven by the clock so frame drops can't desync it \\--
+            local GlowPeriod = 2.4
+            Library:GiveSignal(RunService.RenderStepped:Connect(function()
+                if not PlayersCard.Visible or not MainFrame.Visible then
+                    return
+                end
+
+                local Strength = (1 - math.cos(os.clock() / GlowPeriod * math.pi * 2)) / 2
+                PlayersGlowInner.BackgroundTransparency = 1 - 0.4 * Strength
+                PlayersGlowOuter.BackgroundTransparency = 1 - 0.18 * Strength
+            end))
+
+            --// The number reads at full strength, the words stay quiet so the card doesn't compete with the tabs \\--
+            local PlayersCount = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                LayoutOrder = 2,
+                RichText = false,
+                Size = UDim2.fromScale(0, 1),
+                Text = "...",
+                TextSize = 12,
+                Parent = PlayersCard,
+            })
+            local PlayersSuffix = New("TextLabel", {
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                LayoutOrder = 3,
+                RichText = false,
+                Size = UDim2.fromScale(0, 1),
+                Text = "players online",
+                TextSize = 12,
+                TextTransparency = 0.5,
+                Parent = PlayersCard,
+            })
+
+            --// Online count comes from the API; nil until the first successful fetch ("..." is shown meanwhile) \\--
+            local OnlineCount = nil
+            local function FormatCount(Count: number): string
+                --// 12345 -> "12,345" \\--
+                local Text = tostring(math.floor(Count))
+                local Formatted = Text:reverse():gsub("(%d%d%d)", "%1,"):reverse()
+                return (Formatted:gsub("^,", ""))
+            end
+
+            --// Updates the text and returns the card's content width without and with the words \\--
+            local function UpdatePlayersOnline()
+                local Count = OnlineCount
+                PlayersCount.Text = Count and FormatCount(Count) or "..."
+                PlayersSuffix.Text = Count == 1 and "player online" or "players online"
+
+                local Ok, CountWidth =
+                    pcall(Library.GetTextBounds, Library, PlayersCount.Text, PlayersCount.FontFace, PlayersCount.TextSize)
+                local Ok2, SuffixWidth =
+                    pcall(Library.GetTextBounds, Library, PlayersSuffix.Text, PlayersSuffix.FontFace, PlayersSuffix.TextSize)
+                CountWidth = Ok and CountWidth or 8
+                SuffixWidth = Ok2 and SuffixWidth or 90
+
+                local Short = 8 + 6 + CountWidth + 24
+                return Short, Short + 6 + SuffixWidth
+            end
+            --// Polls the API in the background. A failed request keeps the last good count on screen
+            --// instead of flashing an error; the loop stops once the library is unloaded \\--
+            --// Returns true when a valid count came back (only re-lays out the card if the number changed) \\--
+            local function FetchOnlineCount(): boolean
+                local Ok, Body = pcall(game.HttpGet, game, Library.PlayersOnlineUrl)
+                if not Ok or typeof(Body) ~= "string" then
+                    return false
+                end
+
+                local Decoded, Data = pcall(HttpService.JSONDecode, HttpService, Body)
+                local Count = Decoded and typeof(Data) == "table" and tonumber(Data.count)
+                if not Count or Count < 0 then
+                    return false
+                end
+
+                if Count ~= OnlineCount then
+                    OnlineCount = Count
+                    RefreshProfile()
+                end
+                return true
+            end
+
+            --// Polling rules, so it can refresh often without wasting requests:
+            --//  * only fetches while the count is actually on screen (window open, card shown)
+            --//  * reopening the window after the data went stale fetches right away
+            --//  * one request at a time; the next wait starts after the previous request finishes
+            --//  * failures back off (x2 each, up to 60s) so a down API isn't hammered, success resets it
+            --//  * +-15% jitter so every client running the hub doesn't hit the API on the same second \\--
+            task.spawn(function()
+                local Failures = 0
+                local LastFetch = -math.huge
+                local NextDelay = 0
+
+                while not Library.Unloaded do
+                    local Enabled = Library.PlayersOnlineLabel == true and typeof(Library.PlayersOnlineUrl) == "string"
+                    local OnScreen = Library.Toggled and MainFrame.Visible and PlayersCard.Visible
+
+                    if Enabled and OnScreen and os.clock() - LastFetch >= NextDelay then
+                        local Succeeded = FetchOnlineCount()
+                        LastFetch = os.clock()
+                        Failures = if Succeeded then 0 else math.min(Failures + 1, 5)
+
+                        local Interval = math.max(tonumber(Library.PlayersOnlineInterval) or 10, 3)
+                        NextDelay = math.min(Interval * 2 ^ Failures, 60) * (0.85 + math.random() * 0.3)
+                    end
+
+                    --// Cheap 1s tick: just a few comparisons, no request unless the checks above pass \\--
+                    task.wait(1)
+                end
+            end)
+
+            --// Profile section (below the players section, inside the shell) \\--
+            local Card = New("Frame", {
+                AnchorPoint = Vector2.new(0.5, 0),
+                BackgroundTransparency = 1,
+                Position = UDim2.new(0.5, 0, 0, GetPlayersRowHeight()),
+                Size = UDim2.new(1, -CardPadding * 2, 1, -6 - GetPlayersRowHeight()),
+                Parent = ProfileHolder,
             })
 
             local Avatar = New("ImageLabel", {
@@ -13065,7 +13283,11 @@ function Library:CreateWindow(WindowInfo)
             RefreshProfile = function()
                 local HasTagline = HasProfileTagline()
 
-                ProfileHolder.Visible = Library.ProfileCard == true
+                local PlayersRowHeight = GetPlayersRowHeight()
+                ProfileHolder.Visible = GetProfileHeight() > 0
+                Card.Visible = Library.ProfileCard == true
+                PlayersCard.Visible = PlayersRowHeight > 0
+                local PlayersShortWidth, PlayersFullWidth = UpdatePlayersOnline()
                 TaglineLabel.Visible = HasTagline
                 TaglineLabel.Text = HasTagline and Library.ProfileTagline or ""
                 local TaglineColor = Library.ProfileTaglineColor
@@ -13102,9 +13324,24 @@ function Library:CreateWindow(WindowInfo)
                         end
                     end
 
-                    CardWidth = math.min(MaxCardWidth, TextWidth + AvatarSize + 24)
+                    CardWidth = if Card.Visible then math.min(MaxCardWidth, TextWidth + AvatarSize + 24) else 0
                 end
-                Card.Size = UDim2.new(0, CardWidth, 1, -6)
+
+                --// The words only show when they fit; otherwise the card falls back to dot + number \\--
+                local ShowSuffix = not IsCompact and PlayersFullWidth <= MaxCardWidth
+                PlayersSuffix.Visible = ShowSuffix
+
+                --// Both sections share the shell's width, sized to whichever needs more room \\--
+                if not IsCompact and PlayersCard.Visible then
+                    CardWidth = math.min(MaxCardWidth, math.max(CardWidth, ShowSuffix and PlayersFullWidth or PlayersShortWidth))
+                end
+                local PlayersSectionHeight = GetPlayersSectionHeight()
+                Shell.Size = UDim2.new(0, CardWidth, 1, -6)
+                ShellDivider.Visible = PlayersCard.Visible and Card.Visible
+                ShellDivider.Position = UDim2.fromOffset(0, PlayersSectionHeight)
+                PlayersCard.Size = UDim2.new(0, CardWidth, 0, PlayersSectionHeight)
+                Card.Position = UDim2.new(0.5, 0, 0, PlayersRowHeight)
+                Card.Size = UDim2.new(0, CardWidth, 1, -6 - PlayersRowHeight)
             end
             RefreshProfile()
 
@@ -13112,6 +13349,7 @@ function Library:CreateWindow(WindowInfo)
             local function ProfileState()
                 return table.concat({
                     tostring(Library.ProfileCard),
+                    tostring(Library.PlayersOnlineLabel),
                     tostring(Library.ProfileTagline),
                     tostring(Library.ProfileTaglineColor),
                     typeof(Library.Scheme.Font) == "Font" and Library.Scheme.Font.Family
